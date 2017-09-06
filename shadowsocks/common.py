@@ -178,10 +178,10 @@ def parse_header(data):
             dest_addr = socket.inet_ntoa(data[1:5])
             dest_port = struct.unpack('>H', data[5:7])[0]
             header_length = 7
-            print '调试'
-            print dest_addr
-            print dest_port
-            print data
+            print ('调试')
+            print (dest_addr)
+            print (dest_port)
+            print (data)
         else:
             logging.warn('header is too short')
     elif addrtype & ADDRTYPE_MASK == ADDRTYPE_HOST:

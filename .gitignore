@@ -39,7 +39,7 @@ venv/
 .vscode/
 
 # Pycharm
-.idea
+.idea/
 
 #ss
 config.json

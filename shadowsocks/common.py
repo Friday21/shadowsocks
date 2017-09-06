@@ -195,7 +195,7 @@ def parse_header(data):
                 print('调试2')
                 print(dest_addr)
                 print(dest_port)
-                print(data)
+                print(to_str(data))
             else:
                 logging.warn('header is too short')
         else:

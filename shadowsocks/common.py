@@ -178,7 +178,7 @@ def parse_header(data):
             dest_addr = socket.inet_ntoa(data[1:5])
             dest_port = struct.unpack('>H', data[5:7])[0]
             header_length = 7
-            print '调试‘
+            print '调试'
             print dest_addr
             print dest_port
             print data

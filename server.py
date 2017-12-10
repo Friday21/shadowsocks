@@ -49,7 +49,7 @@ class Socks5Server(SocketServer.StreamRequestHandler):
     def handle_tcp(self, sock, remote):
         fdset = [sock, remote]
         while True:
-            r, w, e = select.select(fdset, [], [])
+            r, w, e = select.select(fdset, [], [])  # select 是常用的异步socket 处理方法， 此处用来监听socket的读
             if sock in r:
                 if remote.send(self.decrypt(sock.recv(4096))) <= 0: break
             if remote in r:
@@ -69,34 +69,34 @@ class Socks5Server(SocketServer.StreamRequestHandler):
             print 'socks connection from ', self.client_address
             sock = self.connection
             sock.recv(262)
-            self.send_encrpyt(sock, "\x05\x00")
+            self.send_encrpyt(sock, "\x05\x00")  # socks5, 无认证
             data = self.decrypt(self.rfile.read(4))
             mode = ord(data[1])
             addrtype = ord(data[3])
-            if addrtype == 1:
+            if addrtype == 1:  # ipv4
                 addr = socket.inet_ntoa(self.decrypt(self.rfile.read(4)))
-            elif addrtype == 3:
+            elif addrtype == 3:  # 域名
                 addr = self.decrypt(self.rfile.read(ord(self.decrypt(sock.recv(1)))))
             else:
                 # not support
                 return
             port = struct.unpack('>H', self.decrypt(self.rfile.read(2)))
-            reply = "\x05\x00\x00\x01"
+            reply = "\x05\x00\x00\x01"  # socks5, 成功连接， 保留， IPV4
             try:
-                if mode == 1:
+                if mode == 1:  # connect
                     remote = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                     remote.connect((addr, port[0]))
                     local = remote.getsockname()
-                    reply += socket.inet_aton(local[0]) + struct.pack(">H", local[1])
+                    reply += socket.inet_aton(local[0]) + struct.pack(">H", local[1])  # 指明返回的地址和端口
                     print 'Tcp connect to', addr, port[0]
                 else:
-                    reply = "\x05\x07\x00\x01" # Command not supported
+                    reply = "\x05\x07\x00\x01"  #socks5， 不支持请求包中的CMD， 保留， IPV4
                     print 'command not supported'
             except socket.error:
                 # Connection refused
-                reply = '\x05\x05\x00\x01\x00\x00\x00\x00\x00\x00'
+                reply = '\x05\x05\x00\x01\x00\x00\x00\x00\x00\x00'  # socks5, 连接拒绝
             self.send_encrpyt(sock, reply)
-            if reply[1] == '\x00':
+            if reply[1] == '\x00':  # 连接成功
                 if mode == 1:
                     self.handle_tcp(sock, remote)
         except socket.error:

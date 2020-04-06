@@ -27,6 +27,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../'))
 from shadowsocks import shell, daemon, eventloop, tcprelay, udprelay, \
     asyncdns, manager
 
+logger = logging.getLogger(__name__)
+
 
 def main():
     shell.check_python()
@@ -71,6 +73,7 @@ def main():
         a_config['password'] = password
         logging.info("starting server at %s:%d" %
                      (a_config['server'], int(port)))
+        logger.info('[流程观察server-main]创建TCPRelay, UDPRelay, EventLoop')
         tcp_servers.append(tcprelay.TCPRelay(a_config, dns_resolver, False))
         udp_servers.append(udprelay.UDPRelay(a_config, dns_resolver, False))
 
@@ -92,6 +95,7 @@ def main():
             list(map(lambda s: s.add_to_loop(loop), tcp_servers + udp_servers))
 
             daemon.set_user(config.get('user', None))
+            logger.info('[流程观察server-main]loop run, 阻塞在监听socket读写事件')
             loop.run()
         except Exception as e:
             shell.print_exception(e)

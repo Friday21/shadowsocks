@@ -195,7 +195,7 @@ class EventLoop(object):
         while not self._stopping:
             asap = False
             try:
-                events = self.poll(TIMEOUT_PRECISION)
+                events = self.poll(TIMEOUT_PRECISION)  # TODO 主循环阻塞在这里（select 冲突）
             except (OSError, IOError) as e:
                 if errno_from_exception(e) in (errno.EPIPE, errno.EINTR):
                     # EPIPE: Happens when the client closes the connection

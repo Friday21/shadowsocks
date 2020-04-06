@@ -34,7 +34,7 @@ from shadowsocks.common import parse_header, onetimeauth_verify, \
 # we clear at most TIMEOUTS_CLEAN_SIZE timeouts each time
 TIMEOUTS_CLEAN_SIZE = 512
 
-MSG_FASTOPEN = 0x20000000
+MSG_FASTOPEN = 0x20000000  # TODO 536870912
 
 # SOCKS METHOD definition
 METHOD_NOAUTH = 0
@@ -97,6 +97,8 @@ UP_STREAM_BUF_SIZE = 16 * 1024
 DOWN_STREAM_BUF_SIZE = 32 * 1024
 
 # helper exceptions for TCPRelayHandler
+logger = logging.getLogger(__name__)
+stream_desc = {0: '不可读不可写', 1: '等待读', 2: '等待写', 3: '等待读，等待写'}
 
 
 class BadSocksHeader(Exception):
@@ -183,12 +185,17 @@ class TCPRelayHandler(object):
 
         # check if status is changed
         # only update if dirty
+        # TODO 根据更改之后的状态更新event loop监听的socket事件类型
         dirty = False
         if stream == STREAM_DOWN:
+            logger.info('[流程观察TCPRelayHandler-_update_stream]更新STREAM_DOWN为{}, TCPRelayHandler:{}'.format(
+                stream_desc.get(status), id(self)))
             if self._downstream_status != status:
                 self._downstream_status = status
                 dirty = True
         elif stream == STREAM_UP:
+            logger.info('[流程观察TCPRelayHandler-_update_stream]更新STREAM_UP为{}, TCPRelayHandler:{}'.format(
+                stream_desc.get(status), id(self)))
             if self._upstream_status != status:
                 self._upstream_status = status
                 dirty = True
@@ -262,6 +269,8 @@ class TCPRelayHandler(object):
             data = self._ota_chunk_data_gen(data)
         data = self._cryptor.encrypt(data)
         self._data_to_write_to_remote.append(data)
+        logger.info('[流程观察TCPRelayHandler-_handle_stage_connecting]处理STAGE_CONNECTING状态, 在此状态下， '
+                    '把下游过来的数据暂存在_data_to_write_to_remote中。TCPRelayHandler:{}'.format(id(self)))
 
         if self._config['fast_open'] and not self._fastopen_connected:
             # for sslocal and fastopen, we basically wait for data and use
@@ -277,6 +286,7 @@ class TCPRelayHandler(object):
                 l = len(data)
                 s = remote_sock.sendto(data, MSG_FASTOPEN,
                                        self._chosen_server)
+                # TODO 第二个参数 是 MSG_FASTOPEN flag的协议代号——536870912
                 if s < l:
                     data = data[s:]
                     self._data_to_write_to_remote = [data]
@@ -330,10 +340,12 @@ class TCPRelayHandler(object):
                     logging.error('unknown command %d', cmd)
                     self.destroy()
                     return
-        header_result = parse_header(data)
+        header_result = parse_header(data)  # TODO 获取请求的URL地址（根据socks5 协议）
         if header_result is None:
             raise Exception('can not parse header')
         addrtype, remote_addr, remote_port, header_length = header_result
+        logger.info('[流程观察TCPRelayHandler-_handle_stage_addr]解析客户端传过来的请求连接的地址——{}:{} TCPRelayHandler:{}'.format(
+            common.to_str(remote_addr), remote_port, id(self)))
         logging.info('connecting %s:%d from %s:%d' %
                      (common.to_str(remote_addr), remote_port,
                       self._client_address[0], self._client_address[1]))
@@ -359,14 +371,21 @@ class TCPRelayHandler(object):
         self._remote_address = (common.to_str(remote_addr), remote_port)
         # pause reading
         self._update_stream(STREAM_UP, WAIT_STATUS_WRITING)
-        self._stage = STAGE_DNS
+        self._stage = STAGE_DNS  # TODO 更新stage状态
+        logger.info('[流程观察TCPRelayHandler-_handle_stage_addr]处理STAGE_ADDR状态, 更新stage 为 STAGE_DNS。'
+                    'TCPRelayHandler:{}'.format(id(self)))
         if self._is_local:
             # jump over socks5 response
             if not self._is_tunnel:
                 # forward address to remote
-                self._write_to_sock((b'\x05\x00\x00\x01'
-                                     b'\x00\x00\x00\x00\x10\x10'),
+                # TODO  returning BND.ADDR with all zeros will tell the SOCKS5 client to connect to the SOCKS5
+                #  server as the relay(中继) server.
+                self._write_to_sock((b'\x05\x00\x00\x01'  # TODO 连接成功
+                                     b'\x00\x00\x00\x00\x10\x10'),  # TODO server绑定的地址和端口是 0.0.0.0:4112 (端口不重要)
                                     self._local_sock)
+                logger.info('[流程观察TCPRelayHandler-_handle_stage_addr]处理STAGE_ADDR状态, socks5 连接第四步'
+                            '告知socks5 client连接成功。 TCPRelayHandler:{}'.format(id(self)))
+
             # spec https://shadowsocks.org/en/spec/one-time-auth.html
             # ATYP & 0x10 == 0x10, then OTA is enabled.
             if self._ota_enable_session:
@@ -378,6 +397,8 @@ class TCPRelayHandler(object):
             data_to_send = self._cryptor.encrypt(data)
             self._data_to_write_to_remote.append(data_to_send)
             # notice here may go into _handle_dns_resolved directly
+            logger.info('[流程观察TCPRelayHandler-_handle_stage_addr]处理STAGE_ADDR状态, 对于sslocal， dns解析ssserver地址——{}'
+                        ' TCPRelayHandler:{}'.format(self._chosen_server[0], id(self)))
             self._dns_resolver.resolve(self._chosen_server[0],
                                        self._handle_dns_resolved)
         else:
@@ -388,6 +409,8 @@ class TCPRelayHandler(object):
             elif len(data) > header_length:
                 self._data_to_write_to_remote.append(data[header_length:])
             # notice here may go into _handle_dns_resolved directly
+            logger.info('[流程观察TCPRelayHandler-_handle_stage_addr]处理STAGE_ADDR状态, 对于ssserver， dns解析客户请求地址——{}'
+                        ' TCPRelayHandler:{}'.format(remote_addr, id(self)))
             self._dns_resolver.resolve(remote_addr,
                                        self._handle_dns_resolved)
 
@@ -421,7 +444,7 @@ class TCPRelayHandler(object):
             return
 
         ip = result[1]
-        self._stage = STAGE_CONNECTING
+        self._stage = STAGE_CONNECTING  # TODO stage 更新为CONNECTING
         remote_addr = ip
         if self._is_local:
             remote_port = self._chosen_server[1]
@@ -443,13 +466,17 @@ class TCPRelayHandler(object):
             try:
                 remote_sock.connect((remote_addr, remote_port))
             except (OSError, IOError) as e:
+                # TODO 其它异常没有抛出也没有处理。。。。
                 if eventloop.errno_from_exception(e) == \
                         errno.EINPROGRESS:
                     pass
             self._loop.add(remote_sock,
                            eventloop.POLL_ERR | eventloop.POLL_OUT,
-                           self._server)
+                           self._server)  # TODO 调用connect之后（非阻塞），监听remote的可写事件
             self._stage = STAGE_CONNECTING
+            logger.info('[流程观察TCPRelayHandler-_handle_dns_resolved]处理STAGE_DNS状态， DNS解析回调, '
+                        '创建和connect remote_sock（客户要访问的真实地址）, loop监听remote_sock的可读状态。stage更新为STAGE_CONNECTING'
+                        '  TCPRelayHandler:{}'.format(id(self)))
             self._update_stream(STREAM_UP, WAIT_STATUS_READWRITING)
             self._update_stream(STREAM_DOWN, WAIT_STATUS_READING)
 
@@ -499,6 +526,8 @@ class TCPRelayHandler(object):
         return data_len + sha110 + data
 
     def _handle_stage_stream(self, data):
+        logger.info('[流程观察TCPRelayHandler-_handle_stage_stream]处理STAGE_STREAM状态, 把data写入到_remote_sock。'
+                    ' TCPRelayHandler:{}'.format(id(self)))
         if self._is_local:
             if self._ota_enable_session:
                 data = self._ota_chunk_data_gen(data)
@@ -536,6 +565,7 @@ class TCPRelayHandler(object):
             raise NoAcceptableMethods
 
     def _handle_stage_init(self, data):
+        # TODO 此方法为sslocal和浏览器之间交流使用
         try:
             self._check_auth_method(data)
         except BadSocksHeader:
@@ -546,12 +576,15 @@ class TCPRelayHandler(object):
             self.destroy()
             return
 
-        self._write_to_sock(b'\x05\00', self._local_sock)
+        self._write_to_sock(b'\x05\00', self._local_sock)  # TODO socks 版本5， 认证方式为不需要认证
         self._stage = STAGE_ADDR
+        logger.info('[流程观察TCPRelayHandler-_handle_stage_init]处理STAGE_INIT状态, socks5 连接第二步'
+                    '检查socks5版本和认证方法并返回给socks5客户端选中的socks5认证方法（0：不需要认证）。 状态变更为STAGE_ADDR。 TCPRelayHandler:{}'.format(id(self)))
 
     def _on_local_read(self):
         # handle all local read events and dispatch them to methods for
         # each stage
+        # TODO 很多状态的转化发起点都是在这里。
         if not self._local_sock:
             return
         is_local = self._is_local
@@ -566,7 +599,12 @@ class TCPRelayHandler(object):
             if eventloop.errno_from_exception(e) in \
                     (errno.ETIMEDOUT, errno.EAGAIN, errno.EWOULDBLOCK):
                 return
-        if not data:
+            logger.info('异常：{}'.format(e))
+        if not data:  # 客户端关闭链接
+            # TODO When recv returns a value of 0 that means the connection has been closed.
+            # These calls return the number of bytes received, or -1 if an error occurred.
+            # The return value will be 0 when the peer has performed an orderly shutdown.
+            logger.error('没有data(客户端断掉连接)， 执行销毁')
             self.destroy()
             return
         self._update_activity(len(data))
@@ -575,6 +613,7 @@ class TCPRelayHandler(object):
             if not data:
                 return
         if self._stage == STAGE_STREAM:
+            logger.info('[流程观察TCPRelayHandler-_on_local_read]处理STAGE_STREAM状态, TCPRelayHandler:{}'.format(id(self)))
             self._handle_stage_stream(data)
             return
         elif is_local and self._stage == STAGE_INIT:
@@ -583,11 +622,14 @@ class TCPRelayHandler(object):
                 self._handle_stage_addr(data)
                 return
             else:
+                logger.info('[流程观察TCPRelayHandler-_on_local_read]处理STAGE_INIT状态, TCPRelayHandler:{}'.format(id(self)))
                 self._handle_stage_init(data)
         elif self._stage == STAGE_CONNECTING:
+            logger.info('[流程观察TCPRelayHandler-_on_local_read]处理STAGE_CONNECTING状态, TCPRelayHandler:{}'.format(id(self)))
             self._handle_stage_connecting(data)
         elif (is_local and self._stage == STAGE_ADDR) or \
-                (not is_local and self._stage == STAGE_INIT):
+                (not is_local and self._stage == STAGE_INIT):  # TODO 服务端直接从INIT跳转到STAGE_ADDR
+            logger.info('[流程观察TCPRelayHandler-_on_local_read]处理STAGE_ADDR状态, TCPRelayHandler:{}'.format(id(self)))
             self._handle_stage_addr(data)
 
     def _on_remote_read(self):
@@ -612,6 +654,7 @@ class TCPRelayHandler(object):
             data = self._cryptor.decrypt(data)
         else:
             data = self._cryptor.encrypt(data)
+        logger.info('[流程观察TCPRelayHandler-_on_remote_read]_remote_sock读取， 并把读出的数据写入_local_sock, TCPRelayHandler:{}'.format(id(self)))
         try:
             self._write_to_sock(data, self._local_sock)
         except Exception as e:
@@ -623,6 +666,9 @@ class TCPRelayHandler(object):
 
     def _on_local_write(self):
         # handle local writable event
+        logger.info(
+            '[流程观察TCPRelayHandler-_on_local_write]把内存中的_data_to_write_to_local数据写入_local_sock, '
+            'TCPRelayHandler:{}'.format(id(self)))
         if self._data_to_write_to_local:
             data = b''.join(self._data_to_write_to_local)
             self._data_to_write_to_local = []
@@ -632,7 +678,10 @@ class TCPRelayHandler(object):
 
     def _on_remote_write(self):
         # handle remote writable event
-        self._stage = STAGE_STREAM
+        logger.info(
+            '[流程观察TCPRelayHandler-_on_remote_write]把内存中的_data_to_write_to_remote数据写入_remote_sock, '
+            'stage状态更新为STAGE_STREAM。 TCPRelayHandler:{}'.format(id(self)))
+        self._stage = STAGE_STREAM  # TODO 在这里更新stage为STREAM(connect 成功之后， remote socket就可写了)
         if self._data_to_write_to_remote:
             data = b''.join(self._data_to_write_to_remote)
             self._data_to_write_to_remote = []
@@ -665,10 +714,12 @@ class TCPRelayHandler(object):
                 if self._stage == STAGE_DESTROYED:
                     return
             if event & (eventloop.POLL_IN | eventloop.POLL_HUP):
+                logger.info('[流程观察TCPRelayHandler-handle_event]_remote_sock可读, TCPRelayHandler:{}'.format(id(self)))
                 self._on_remote_read()
                 if self._stage == STAGE_DESTROYED:
                     return
             if event & eventloop.POLL_OUT:
+                logger.info('[流程观察TCPRelayHandler-handle_event]_remote_sock可写, TCPRelayHandler:{}'.format(id(self)))
                 self._on_remote_write()
         elif sock == self._local_sock:
             if event & eventloop.POLL_ERR:
@@ -676,10 +727,12 @@ class TCPRelayHandler(object):
                 if self._stage == STAGE_DESTROYED:
                     return
             if event & (eventloop.POLL_IN | eventloop.POLL_HUP):
+                logger.info('[流程观察TCPRelayHandler-handle_event]_local_sock可读, TCPRelayHandler:{}'.format(id(self)))
                 self._on_local_read()
                 if self._stage == STAGE_DESTROYED:
                     return
             if event & eventloop.POLL_OUT:
+                logger.info('[流程观察TCPRelayHandler-handle_event]_local_sock可写, TCPRelayHandler:{}'.format(id(self)))
                 self._on_local_write()
         else:
             logging.warn('unknown socket')
@@ -716,6 +769,7 @@ class TCPRelayHandler(object):
             self._local_sock = None
         self._dns_resolver.remove_callback(self._handle_dns_resolved)
         self._server.remove_handler(self)
+        logger.info('[流程观察TCPRelayHandler-destroy]销毁自身。TCPRelayHandler:{}'.format(id(self)))
 
 
 class TCPRelay(object):
@@ -756,12 +810,16 @@ class TCPRelay(object):
         if config['fast_open']:
             try:
                 server_socket.setsockopt(socket.SOL_TCP, 23, 5)
+                # TODO 23 is the protocol number of TCP_FASTOPEN it is not defined in socket module if python2 so
+                #  writing manually here and 5 is the queue length for number of TFO request which are
+                #  yet to complete 3 way handshake.
             except socket.error:
                 logging.error('warning: fast open is not available')
                 self._config['fast_open'] = False
         server_socket.listen(1024)
         self._server_socket = server_socket
         self._stat_callback = stat_callback
+        logger.info('[流程观察TCPRelay-init]创建TCPRelay, 监听（listen）{}'.format(sa))
 
     def add_to_loop(self, loop):
         if self._eventloop:
@@ -772,6 +830,7 @@ class TCPRelay(object):
         self._eventloop.add(self._server_socket,
                             eventloop.POLL_IN | eventloop.POLL_ERR, self)
         self._eventloop.add_periodic(self.handle_periodic)
+        logger.info('[流程观察TCPRelay-add_to_loop]加入loop， 监听TCPRelay _server_socket的读事件和异常事件')
 
     def remove_handler(self, handler):
         index = self._handler_to_timeouts.get(hash(handler), -1)
@@ -844,9 +903,10 @@ class TCPRelay(object):
             try:
                 logging.debug('accept')
                 conn = self._server_socket.accept()
-                TCPRelayHandler(self, self._fd_to_handlers,
-                                self._eventloop, conn[0], self._config,
-                                self._dns_resolver, self._is_local)
+                h = TCPRelayHandler(self, self._fd_to_handlers,
+                                    self._eventloop, conn[0], self._config,
+                                    self._dns_resolver, self._is_local)
+                logger.info('[流程观察TCPRelay-handle_event]accept 客户端连接， 创建TCPRelayHandler:{}'.format(id(h)))
             except (OSError, IOError) as e:
                 error_no = eventloop.errno_from_exception(e)
                 if error_no in (errno.EAGAIN, errno.EINPROGRESS,
@@ -859,6 +919,8 @@ class TCPRelay(object):
         else:
             if sock:
                 handler = self._fd_to_handlers.get(fd, None)
+                logger.info('[流程观察TCPRelay-handle_event]socket:{}有活动，交给handler——TCPRelayHandler:{}处理'.format(
+                    id(sock), id(handler)))
                 if handler:
                     handler.handle_event(sock, event)
             else:
